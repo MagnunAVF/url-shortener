@@ -9,10 +9,13 @@ import (
 	"github.com/gofiber/fiber/v2/middleware/cors"
 	"github.com/gofiber/fiber/v2/middleware/logger"
 	"github.com/joho/godotenv"
+	"gorm.io/driver/postgres"
+	"gorm.io/gorm"
 )
 
 type Config struct {
 	AppDomain string
+	DB        *gorm.DB
 }
 
 func main() {
@@ -54,7 +57,13 @@ func handleGetStats(cfg *Config) fiber.Handler {
 }
 
 func loadConfig(ctx context.Context) *Config {
+	DB, err := gorm.Open(postgres.Open(os.Getenv("DB_URL")), &gorm.Config{})
+	if err != nil {
+		log.Fatalf("Unable to connect to database: %v", err)
+	}
+
 	return &Config{
 		AppDomain: os.Getenv("APP_DOMAIN"),
+		DB:        DB,
 	}
 }
