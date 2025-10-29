@@ -2,12 +2,11 @@ package main
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/binary"
+	"encoding/json"
 	"fmt"
 	"log"
+	"net/http"
 	"os"
-	"time"
 
 	"github.com/MagnunAVF/url-shortener/internal"
 	"github.com/gofiber/fiber/v2"
@@ -19,8 +18,9 @@ import (
 )
 
 type Config struct {
-	AppDomain string
-	DB        *gorm.DB
+	AppDomain    string
+	IDServiceURL string
+	DB           *gorm.DB
 }
 
 func main() {
@@ -76,11 +76,16 @@ func handleShorten(cfg *Config) fiber.Handler {
 			})
 		}
 
-		id := getNewID()
-		shortCode := internal.EncodeID(uint64(id))
+		id, err := getNewID(cfg.IDServiceURL)
+		if err != nil {
+			log.Printf("Error getting new ID: %v", err)
+			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Could not generate ID"})
+		}
+
+		shortCode := internal.EncodeID(id)
 
 		newURL := internal.URL{
-			ID:        id,
+			ID:        int64(id), // TODO: improve this id type. at this time, tmp cast this value
 			ShortCode: shortCode,
 			LongURL:   req.URL,
 		}
@@ -116,31 +121,26 @@ func loadConfig(ctx context.Context) *Config {
 	}
 
 	return &Config{
-		AppDomain: os.Getenv("APP_DOMAIN"),
-		DB:        DB,
+		AppDomain:    os.Getenv("APP_DOMAIN"),
+		IDServiceURL: "http://" + os.Getenv("ID_SERVICE_PORT") + "/new-id",
+		DB:           DB,
 	}
 }
 
-// Generate a positive 63-bit integer
-func getNewID() int64 {
-	var b [8]byte
-	if _, err := rand.Read(b[:]); err == nil {
-		// Mask to 63 bits to avoid negative values and overflow
-		v := int64(binary.BigEndian.Uint64(b[:]) & ((1 << 63) - 1))
-		if v != 0 {
-			return v
-		}
+func getNewID(serviceURL string) (uint64, error) {
+	resp, err := http.Get(serviceURL)
+	if err != nil {
+		return 0, fmt.Errorf("failed to call ID service: %w", err)
 	}
-	// Fallback to time-based value; ensure non-zero and 63-bit positive
-	ns := time.Now().UnixNano()
-	if ns < 0 {
-		ns = -ns
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return 0, fmt.Errorf("ID service returned non-200 status: %s", resp.Status)
 	}
-
-	ns &= (1 << 63) - 1
-	if ns == 0 {
-		ns = 1
+	var data struct {
+		ID uint64 `json:"id"`
 	}
-
-	return ns
+	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
+		return 0, fmt.Errorf("failed to decode ID service response: %w", err)
+	}
+	return data.ID, nil
 }
