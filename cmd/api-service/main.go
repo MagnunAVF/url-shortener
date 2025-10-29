@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -52,7 +53,20 @@ func main() {
 
 func handleRedirect(cfg *Config) fiber.Handler {
 	return func(c *fiber.Ctx) error {
-		return c.SendString("Returning from handleRedirect")
+		shortCode := c.Params("short_code")
+
+		var url internal.URL
+		err := cfg.DB.Select("long_url").Where("short_code = ?", shortCode).First(&url).Error
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "Short URL not found"})
+		} else if err != nil {
+			log.Printf("DB Error: %v", err)
+			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Internal Server Error"})
+		}
+
+		longURL := url.LongURL
+
+		return c.Redirect(longURL, fiber.StatusFound)
 	}
 }
 
