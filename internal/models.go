@@ -10,3 +10,9 @@ type URL struct {
 	LongURL   string `gorm:"type:text;index;not null"`
 	CreatedAt time.Time
 }
+
+type URLAnalytics struct {
+	ShortCode  string `gorm:"primaryKey;type:varchar(12)"`
+	URL        URL    `gorm:"foreignKey:ShortCode;references:ShortCode;constraint:OnDelete:CASCADE"`
+	ClickCount int64  `gorm:"default:0;not null"`
+}
