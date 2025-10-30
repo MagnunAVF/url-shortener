@@ -8,12 +8,15 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strconv"
+	"time"
 
 	"github.com/MagnunAVF/url-shortener/internal"
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/middleware/cors"
 	"github.com/gofiber/fiber/v2/middleware/logger"
 	"github.com/joho/godotenv"
+	"github.com/redis/go-redis/v9"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 )
@@ -21,6 +24,7 @@ import (
 type Config struct {
 	AppDomain    string
 	IDServiceURL string
+	Redis        *redis.Client
 	DB           *gorm.DB
 }
 
@@ -54,17 +58,30 @@ func main() {
 func handleRedirect(cfg *Config) fiber.Handler {
 	return func(c *fiber.Ctx) error {
 		shortCode := c.Params("short_code")
+		ctx := c.Context()
 
-		var url internal.URL
-		err := cfg.DB.Select("long_url").Where("short_code = ?", shortCode).First(&url).Error
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "Short URL not found"})
+		cacheKey := "url:" + shortCode
+		longURL, err := cfg.Redis.Get(ctx, cacheKey).Result()
+
+		if err == redis.Nil {
+			var url internal.URL
+			err = cfg.DB.Select("long_url").Where("short_code = ?", shortCode).First(&url).Error
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "Short URL not found"})
+			} else if err != nil {
+				log.Printf("DB Error: %v", err)
+				return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Database error"})
+			}
+
+			longURL = url.LongURL
+
+			if err := cfg.Redis.Set(ctx, cacheKey, longURL, 1*time.Hour).Err(); err != nil {
+				log.Printf("Error setting cache: %v", err)
+			}
 		} else if err != nil {
-			log.Printf("DB Error: %v", err)
-			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Internal Server Error"})
+			log.Printf("Error reading cache: %v", err)
+			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Cache error"})
 		}
-
-		longURL := url.LongURL
 
 		return c.Redirect(longURL, fiber.StatusFound)
 	}
@@ -134,9 +151,20 @@ func loadConfig(ctx context.Context) *Config {
 		log.Fatalf("Unable to connect to database: %v", err)
 	}
 
+	redisDB, _ := strconv.Atoi(os.Getenv("REDIS_DB"))
+	rdb := redis.NewClient(&redis.Options{
+		Addr:     os.Getenv("REDIS_ADDR"),
+		Password: os.Getenv("REDIS_PASSWORD"),
+		DB:       redisDB,
+	})
+	if _, err := rdb.Ping(ctx).Result(); err != nil {
+		log.Fatalf("Unable to connect to Redis: %v", err)
+	}
+
 	return &Config{
 		AppDomain:    os.Getenv("APP_DOMAIN"),
 		IDServiceURL: "http://" + os.Getenv("ID_SERVICE_PORT") + "/new-id",
+		Redis:        rdb,
 		DB:           DB,
 	}
 }
