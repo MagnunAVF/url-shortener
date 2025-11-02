@@ -45,6 +45,26 @@ services:
       timeout: 5s
       retries: 5
 
+  clickhouse:
+    image: clickhouse/clickhouse-server:25.9-alpine
+    container_name: clickhouse
+    environment:
+      CLICKHOUSE_DB: ${CLICKHOUSE_DB:-analytics}
+      CLICKHOUSE_USER: ${CLICKHOUSE_USER:-default}
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-}
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: 1
+    ports:
+      - "8123:8123"
+      - "9000:9000"
+    volumes:
+      - clickhouse_data:/var/lib/clickhouse
+      - ./clickhouse/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD", "clickhouse-client", "--query", "SELECT 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
   api-service:
     container_name: api-service
     build:
@@ -62,6 +82,8 @@ services:
         condition: service_healthy
       rabbitmq:
         condition: service_healthy
+      clickhouse:
+        condition: service_healthy
       id-service:
         condition: service_started
 
@@ -73,6 +95,9 @@ services:
       args:
         SERVICE_DIR: cmd/id-service
     env_file: .env
+    depends_on:
+      clickhouse:
+        condition: service_healthy
 
   analytics-worker:
     container_name: analytics-worker
@@ -87,7 +112,10 @@ services:
         condition: service_healthy
       rabbitmq:
         condition: service_healthy
+      clickhouse:
+        condition: service_healthy
     restart: on-failure
 
 volumes:
   postgres_data:
+  clickhouse_data:
