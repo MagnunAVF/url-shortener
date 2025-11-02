@@ -3,8 +3,10 @@ package logger
 import (
 	"time"
 
-	"github.com/gofiber/fiber/v2"
 	"log/slog"
+
+	"github.com/gofiber/fiber/v2"
+	"github.com/google/uuid"
 )
 
 // FiberMiddleware returns a Fiber middleware that logs requests using slog
@@ -12,6 +14,15 @@ import (
 func FiberMiddleware() fiber.Handler {
 	return func(c *fiber.Ctx) error {
 		start := time.Now()
+		// Extract or generate request ID
+		reqID := c.Get("X-Request-Id")
+		if reqID == "" {
+			reqID = uuid.NewString()
+		}
+		// Make available to handlers and set response header
+		c.Locals("request_id", reqID)
+		c.Set("X-Request-Id", reqID)
+
 		err := c.Next()
 		latency := time.Since(start)
 
@@ -33,6 +44,7 @@ func FiberMiddleware() fiber.Handler {
 			"ip", ip,
 			"user_agent", ua,
 			"latency_ms", float64(latency.Microseconds()) / 1000.0,
+			"request_id", reqID,
 		}
 
 		if err != nil {

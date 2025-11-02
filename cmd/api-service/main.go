@@ -35,6 +35,7 @@ type ClickEvent struct {
 	ShortCode string    `json:"short_code"`
 	Timestamp time.Time `json:"timestamp"`
 	UserAgent string    `json:"user_agent"`
+	RequestID string    `json:"request_id,omitempty"`
 }
 
 func main() {
@@ -73,14 +74,15 @@ func main() {
 func handleRedirect(cfg *Config) fiber.Handler {
 	return func(c *fiber.Ctx) error {
 		shortCode := c.Params("short_code")
-		ctx := c.Context()
+		reqID := c.Locals("request_id").(string)
+		ctx := applog.WithRequestID(context.Background(), reqID)
 
 		cacheKey := "url:" + shortCode
 		longURL, err := cfg.Redis.Get(ctx, cacheKey).Result()
 
 		if err == redis.Nil {
 			var url internal.URL
-			err = cfg.DB.Select("long_url").Where("short_code = ?", shortCode).First(&url).Error
+			err = cfg.DB.WithContext(ctx).Select("long_url").Where("short_code = ?", shortCode).First(&url).Error
 			if errors.Is(err, gorm.ErrRecordNotFound) {
 				return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "Short URL not found"})
 			} else if err != nil {
@@ -102,7 +104,7 @@ func handleRedirect(cfg *Config) fiber.Handler {
 		if userAgent == "" {
 			userAgent = "Unknown"
 		}
-		go publishClickEvent(cfg, shortCode, userAgent)
+		go publishClickEvent(cfg, shortCode, userAgent, reqID)
 
 		return c.Redirect(longURL, fiber.StatusFound)
 	}
@@ -120,8 +122,11 @@ func handleShorten(cfg *Config) fiber.Handler {
 			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "URL cannot be empty"})
 		}
 
+		reqID, _ := c.Locals("request_id").(string)
+		ctx := applog.WithRequestID(context.Background(), reqID)
+
 		var existingURL internal.URL
-		err := cfg.DB.Select("short_code").Where("long_url = ?", req.URL).First(&existingURL).Error
+		err := cfg.DB.WithContext(ctx).Select("short_code").Where("long_url = ?", req.URL).First(&existingURL).Error
 		if err == nil {
 			return c.JSON(fiber.Map{
 				"short_url": fmt.Sprintf("%s/%s", cfg.AppDomain, existingURL.ShortCode),
@@ -130,7 +135,7 @@ func handleShorten(cfg *Config) fiber.Handler {
 
 		id, err := getNewID(cfg.IDServiceURL)
 		if err != nil {
-			slog.Error("Error getting new ID", "err", err)
+			slog.Error("Error getting new ID", "err", err, "request_id", reqID)
 			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Could not generate ID"})
 		}
 
@@ -142,7 +147,7 @@ func handleShorten(cfg *Config) fiber.Handler {
 			LongURL:   req.URL,
 		}
 
-		err = cfg.DB.Transaction(func(tx *gorm.DB) error {
+		err = cfg.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 			if err := tx.Create(&newURL).Error; err != nil {
 				return err
 			}
@@ -150,7 +155,7 @@ func handleShorten(cfg *Config) fiber.Handler {
 		})
 
 		if err != nil {
-			slog.Error("Error creating short URL", "err", err)
+			slog.Error("Error creating short URL", "err", err, "request_id", reqID)
 			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Could not save URL"})
 		}
 
@@ -239,11 +244,12 @@ func getNewID(serviceURL string) (uint64, error) {
 	return data.ID, nil
 }
 
-func publishClickEvent(cfg *Config, shortCode, userAgent string) {
+func publishClickEvent(cfg *Config, shortCode, userAgent, requestID string) {
 	event := ClickEvent{
 		ShortCode: shortCode,
 		Timestamp: time.Now(),
 		UserAgent: userAgent,
+		RequestID: requestID,
 	}
 	slog.Info("Publishing click event", "event", event)
 

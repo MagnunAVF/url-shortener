@@ -3,7 +3,6 @@ package logger
 import (
 	"context"
 	"errors"
-	"log/slog"
 	"time"
 
 	"gorm.io/gorm/logger"
@@ -41,19 +40,19 @@ func (g *GormLogger) LogMode(level logger.LogLevel) logger.Interface {
 
 func (g *GormLogger) Info(ctx context.Context, msg string, data ...interface{}) {
 	if g.logLevel >= logger.Info {
-		slog.Info("gorm info", "msg_detail", msg, "data", data)
+		FromContext(ctx).Info("gorm info", "msg_detail", msg, "data", data)
 	}
 }
 
 func (g *GormLogger) Warn(ctx context.Context, msg string, data ...interface{}) {
 	if g.logLevel >= logger.Warn {
-		slog.Warn("gorm warn", "msg_detail", msg, "data", data)
+		FromContext(ctx).Warn("gorm warn", "msg_detail", msg, "data", data)
 	}
 }
 
 func (g *GormLogger) Error(ctx context.Context, msg string, data ...interface{}) {
 	if g.logLevel >= logger.Error {
-		slog.Error("gorm error", "msg_detail", msg, "data", data)
+		FromContext(ctx).Error("gorm error", "msg_detail", msg, "data", data)
 	}
 }
 
@@ -74,7 +73,7 @@ func (g *GormLogger) Trace(ctx context.Context, begin time.Time, fc func() (stri
 	if err != nil && !errors.Is(err, context.Canceled) {
 		attrs = append(attrs, "err", err)
 		if g.logLevel >= logger.Error {
-			slog.Error("gorm trace", attrs...)
+			FromContext(ctx).Error("gorm trace", attrs...)
 		}
 		return
 	}
@@ -82,12 +81,12 @@ func (g *GormLogger) Trace(ctx context.Context, begin time.Time, fc func() (stri
 	if g.slowThreshold > 0 && elapsed > g.slowThreshold {
 		attrs = append(attrs, "slow", true, "threshold_ms", float64(g.slowThreshold.Microseconds())/1000.0)
 		if g.logLevel >= logger.Warn {
-			slog.Warn("gorm trace slow", attrs...)
+			FromContext(ctx).Warn("gorm trace slow", attrs...)
 		}
 		return
 	}
 
 	if g.logLevel >= logger.Info {
-		slog.Info("gorm trace", attrs...)
+		FromContext(ctx).Info("gorm trace", attrs...)
 	}
 }

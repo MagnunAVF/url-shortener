@@ -20,6 +20,7 @@ type ClickEvent struct {
 	ShortCode string    `json:"short_code"`
 	Timestamp time.Time `json:"timestamp"`
 	UserAgent string    `json:"user_agent"`
+	RequestID string    `json:"request_id,omitempty"`
 }
 
 func main() {
@@ -74,7 +75,6 @@ func main() {
 
 	slog.Info("Analytics Worker started. Waiting for click events...")
 
-	var forever chan struct{}
 	var events []ClickEvent
 	var deliveries []amqp091.Delivery
 
@@ -96,6 +96,7 @@ func main() {
 					d.Reject(false)
 					continue
 				}
+				slog.Info("received click event", "short_code", event.ShortCode, "request_id", event.RequestID)
 				events = append(events, event)
 				deliveries = append(deliveries, d)
 
@@ -117,8 +118,8 @@ func main() {
 		}
 	}()
 
-	// Block forever
-	<-forever
+	// Block forever without using a nil channel
+	select {}
 }
 
 func processBatch(db *gorm.DB, events []ClickEvent, deliveries []amqp091.Delivery) {
