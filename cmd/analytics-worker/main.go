@@ -29,7 +29,7 @@ func main() {
 
 	applog.InitFromEnv()
 
-	writeDB, err := gorm.Open(postgres.Open(os.Getenv("DB_URL")), &gorm.Config{})
+	writeDB, err := gorm.Open(postgres.Open(os.Getenv("DB_URL")), &gorm.Config{Logger: applog.NewGormLogger(os.Getenv("GORM_LOG_LEVEL"))})
 	if err != nil {
 		slog.Error("Unable to connect to primary database", "err", err)
 		os.Exit(1)

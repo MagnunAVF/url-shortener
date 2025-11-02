@@ -15,7 +15,6 @@ import (
 	applog "github.com/MagnunAVF/url-shortener/internal/logger"
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/middleware/cors"
-	"github.com/gofiber/fiber/v2/middleware/logger"
 	"github.com/joho/godotenv"
 	"github.com/rabbitmq/amqp091-go"
 	"github.com/redis/go-redis/v9"
@@ -57,7 +56,7 @@ func main() {
 	slog.Info("Migration complete.")
 
 	app := fiber.New()
-	app.Use(logger.New())
+	app.Use(applog.FiberMiddleware())
 	app.Use(cors.New())
 
 	app.Get("/:short_code", handleRedirect(cfg))
@@ -168,7 +167,7 @@ func handleGetStats(cfg *Config) fiber.Handler {
 }
 
 func loadConfig(ctx context.Context) *Config {
-	DB, err := gorm.Open(postgres.Open(os.Getenv("DB_URL")), &gorm.Config{})
+	DB, err := gorm.Open(postgres.Open(os.Getenv("DB_URL")), &gorm.Config{Logger: applog.NewGormLogger(os.Getenv("GORM_LOG_LEVEL"))})
 	if err != nil {
 		slog.Error("Unable to connect to database", "err", err)
 		os.Exit(1)

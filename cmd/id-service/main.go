@@ -88,6 +88,7 @@ func main() {
 	}
 
 	app := fiber.New()
+	app.Use(applog.FiberMiddleware())
 	app.Get("/new-id", func(c *fiber.Ctx) error {
 		id, err := gen.NextID()
 		if err != nil {
