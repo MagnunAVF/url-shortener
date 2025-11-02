@@ -198,10 +198,12 @@ func loadConfig(ctx context.Context) *Config {
 		log.Fatalf("Failed to declare RabbitMQ queue %q: %v", queueName, err)
 	}
 
+	IDServiceURL := "http://" + os.Getenv("ID_SERVICE_DOMAIN") + os.Getenv("ID_SERVICE_PORT") + "/new-id"
+
 	return &Config{
 		AppDomain:    os.Getenv("APP_DOMAIN"),
 		ClickQueue:   queueName,
-		IDServiceURL: "http://" + os.Getenv("ID_SERVICE_PORT") + "/new-id",
+		IDServiceURL: IDServiceURL,
 		Redis:        rdb,
 		DB:           DB,
 		RabbitMQ:     rabbitCH,

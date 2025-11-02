@@ -45,5 +45,49 @@ services:
       timeout: 5s
       retries: 5
 
+  api-service:
+    container_name: api-service
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        SERVICE_DIR: cmd/api-service
+    env_file: .env
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      id-service:
+        condition: service_started
+
+  id-service:
+    container_name: id-service
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        SERVICE_DIR: cmd/id-service
+    env_file: .env
+
+  analytics-worker:
+    container_name: analytics-worker
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        SERVICE_DIR: cmd/analytics-worker
+    env_file: .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    restart: on-failure
+
 volumes:
   postgres_data:
