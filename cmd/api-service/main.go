@@ -16,6 +16,7 @@ import (
 	"github.com/gofiber/fiber/v2/middleware/cors"
 	"github.com/gofiber/fiber/v2/middleware/logger"
 	"github.com/joho/godotenv"
+	"github.com/rabbitmq/amqp091-go"
 	"github.com/redis/go-redis/v9"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
@@ -23,9 +24,17 @@ import (
 
 type Config struct {
 	AppDomain    string
+	ClickQueue   string
 	IDServiceURL string
 	Redis        *redis.Client
 	DB           *gorm.DB
+	RabbitMQ     *amqp091.Channel
+}
+
+type ClickEvent struct {
+	ShortCode string    `json:"short_code"`
+	Timestamp time.Time `json:"timestamp"`
+	UserAgent string    `json:"user_agent"`
 }
 
 func main() {
@@ -37,7 +46,7 @@ func main() {
 	cfg := loadConfig(ctx)
 
 	log.Println("Running GORM Auto-Migration...")
-	err := cfg.DB.AutoMigrate(&internal.URL{})
+	err := cfg.DB.AutoMigrate(&internal.URL{}, &internal.URLAnalytics{})
 	if err != nil {
 		log.Fatalf("Failed to auto-migrate database: %v", err)
 	}
@@ -82,6 +91,12 @@ func handleRedirect(cfg *Config) fiber.Handler {
 			log.Printf("Error reading cache: %v", err)
 			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Cache error"})
 		}
+
+		userAgent := c.Get("User-Agent")
+		if userAgent == "" {
+			userAgent = "Unknown"
+		}
+		go publishClickEvent(cfg, shortCode, userAgent)
 
 		return c.Redirect(longURL, fiber.StatusFound)
 	}
@@ -161,11 +176,35 @@ func loadConfig(ctx context.Context) *Config {
 		log.Fatalf("Unable to connect to Redis: %v", err)
 	}
 
+	rabbitConn, err := amqp091.Dial(os.Getenv("RABBITMQ_URL"))
+	if err != nil {
+		log.Fatalf("Unable to connect to RabbitMQ: %v", err)
+	}
+	rabbitCH, err := rabbitConn.Channel()
+	if err != nil {
+		log.Fatalf("Unable to open RabbitMQ channel: %v", err)
+	}
+
+	queueName := os.Getenv("CLICK_QUEUE_NAME")
+	_, err = rabbitCH.QueueDeclare(
+		queueName,
+		true,  // durable
+		false, // autoDelete
+		false, // exclusive
+		false, // noWait
+		nil,   // args
+	)
+	if err != nil {
+		log.Fatalf("Failed to declare RabbitMQ queue %q: %v", queueName, err)
+	}
+
 	return &Config{
 		AppDomain:    os.Getenv("APP_DOMAIN"),
+		ClickQueue:   queueName,
 		IDServiceURL: "http://" + os.Getenv("ID_SERVICE_PORT") + "/new-id",
 		Redis:        rdb,
 		DB:           DB,
+		RabbitMQ:     rabbitCH,
 	}
 }
 
@@ -185,4 +224,30 @@ func getNewID(serviceURL string) (uint64, error) {
 		return 0, fmt.Errorf("failed to decode ID service response: %w", err)
 	}
 	return data.ID, nil
+}
+
+func publishClickEvent(cfg *Config, shortCode, userAgent string) {
+	event := ClickEvent{
+		ShortCode: shortCode,
+		Timestamp: time.Now(),
+		UserAgent: userAgent,
+	}
+	log.Println("Publishing click event with data:", event)
+
+	body, err := json.Marshal(event)
+	if err != nil {
+		log.Printf("Error marshalling click event: %v", err)
+		return
+	}
+	err = cfg.RabbitMQ.PublishWithContext(
+		context.Background(),
+		"", cfg.ClickQueue, false, false,
+		amqp091.Publishing{
+			ContentType: "application/json",
+			Body:        body,
+		},
+	)
+	if err != nil {
+		log.Printf("Error publishing click event: %v", err)
+	}
 }
