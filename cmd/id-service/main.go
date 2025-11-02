@@ -6,11 +6,12 @@ package main
 // This service solves the "auto-increment" bottleneck in DB.
 
 import (
-	"log"
+	"log/slog"
 	"os"
 	"sync"
 	"time"
 
+	applog "github.com/MagnunAVF/url-shortener/internal/logger"
 	"github.com/gofiber/fiber/v2"
 	"github.com/joho/godotenv"
 )
@@ -74,13 +75,16 @@ func (g *IDGenerator) wait(currentTS int64) int64 {
 
 func main() {
 	if err := godotenv.Load(".env"); err != nil {
-		log.Printf("Warning: .env file not found, relying on env vars: %v", err)
+		slog.Warn(".env file not found, relying on env vars", "err", err)
 	}
+
+	applog.InitFromEnv()
 
 	// hardcoded Node ID = 1 at this time
 	gen, err := NewIDGenerator(1)
 	if err != nil {
-		log.Fatalf("Failed to create ID generator: %v", err)
+		slog.Error("Failed to create ID generator", "err", err)
+		os.Exit(1)
 	}
 
 	app := fiber.New()
@@ -92,6 +96,9 @@ func main() {
 		return c.JSON(fiber.Map{"id": id})
 	})
 
-	log.Printf("Starting ID Service on %s", os.Getenv("ID_SERVICE_PORT"))
-	log.Fatal(app.Listen(os.Getenv("ID_SERVICE_PORT")))
+	slog.Info("Starting ID Service", "port", os.Getenv("ID_SERVICE_PORT"))
+	if err := app.Listen(os.Getenv("ID_SERVICE_PORT")); err != nil {
+		slog.Error("ID Service failed", "err", err)
+		os.Exit(1)
+	}
 }

@@ -5,13 +5,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"strconv"
 	"time"
 
 	"github.com/MagnunAVF/url-shortener/internal"
+	applog "github.com/MagnunAVF/url-shortener/internal/logger"
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/middleware/cors"
 	"github.com/gofiber/fiber/v2/middleware/logger"
@@ -39,18 +40,21 @@ type ClickEvent struct {
 
 func main() {
 	if err := godotenv.Load(".env"); err != nil {
-		log.Printf("Warning: .env file not found, relying on env vars: %v", err)
+		slog.Warn(".env file not found, relying on env vars", "err", err)
 	}
+
+	applog.InitFromEnv()
 
 	ctx := context.Background()
 	cfg := loadConfig(ctx)
 
-	log.Println("Running GORM Auto-Migration...")
+	slog.Info("Running GORM Auto-Migration...")
 	err := cfg.DB.AutoMigrate(&internal.URL{}, &internal.URLAnalytics{})
 	if err != nil {
-		log.Fatalf("Failed to auto-migrate database: %v", err)
+		slog.Error("Failed to auto-migrate database", "err", err)
+		os.Exit(1)
 	}
-	log.Println("Migration complete.")
+	slog.Info("Migration complete.")
 
 	app := fiber.New()
 	app.Use(logger.New())
@@ -60,8 +64,11 @@ func main() {
 	app.Post("/shorten", handleShorten(cfg))
 	app.Get("/stats/:short_code", handleGetStats(cfg))
 
-	log.Printf("Starting API Service on %s", os.Getenv("API_SERVICE_PORT"))
-	log.Fatal(app.Listen(os.Getenv("API_SERVICE_PORT")))
+	slog.Info("Starting API Service", "port", os.Getenv("API_SERVICE_PORT"))
+	if err := app.Listen(os.Getenv("API_SERVICE_PORT")); err != nil {
+		slog.Error("API Service failed", "err", err)
+		os.Exit(1)
+	}
 }
 
 func handleRedirect(cfg *Config) fiber.Handler {
@@ -78,17 +85,17 @@ func handleRedirect(cfg *Config) fiber.Handler {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
 				return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "Short URL not found"})
 			} else if err != nil {
-				log.Printf("DB Error: %v", err)
+				slog.Error("DB error", "err", err)
 				return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Database error"})
 			}
 
 			longURL = url.LongURL
 
 			if err := cfg.Redis.Set(ctx, cacheKey, longURL, 1*time.Hour).Err(); err != nil {
-				log.Printf("Error setting cache: %v", err)
+				slog.Error("Error setting cache", "err", err)
 			}
 		} else if err != nil {
-			log.Printf("Error reading cache: %v", err)
+			slog.Error("Error reading cache", "err", err)
 			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Cache error"})
 		}
 
@@ -124,7 +131,7 @@ func handleShorten(cfg *Config) fiber.Handler {
 
 		id, err := getNewID(cfg.IDServiceURL)
 		if err != nil {
-			log.Printf("Error getting new ID: %v", err)
+			slog.Error("Error getting new ID", "err", err)
 			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Could not generate ID"})
 		}
 
@@ -144,7 +151,7 @@ func handleShorten(cfg *Config) fiber.Handler {
 		})
 
 		if err != nil {
-			log.Printf("Error creating short URL: %v", err)
+			slog.Error("Error creating short URL", "err", err)
 			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Could not save URL"})
 		}
 
@@ -163,7 +170,8 @@ func handleGetStats(cfg *Config) fiber.Handler {
 func loadConfig(ctx context.Context) *Config {
 	DB, err := gorm.Open(postgres.Open(os.Getenv("DB_URL")), &gorm.Config{})
 	if err != nil {
-		log.Fatalf("Unable to connect to database: %v", err)
+		slog.Error("Unable to connect to database", "err", err)
+		os.Exit(1)
 	}
 
 	redisDB, _ := strconv.Atoi(os.Getenv("REDIS_DB"))
@@ -173,16 +181,19 @@ func loadConfig(ctx context.Context) *Config {
 		DB:       redisDB,
 	})
 	if _, err := rdb.Ping(ctx).Result(); err != nil {
-		log.Fatalf("Unable to connect to Redis: %v", err)
+		slog.Error("Unable to connect to Redis", "err", err)
+		os.Exit(1)
 	}
 
 	rabbitConn, err := amqp091.Dial(os.Getenv("RABBITMQ_URL"))
 	if err != nil {
-		log.Fatalf("Unable to connect to RabbitMQ: %v", err)
+		slog.Error("Unable to connect to RabbitMQ", "err", err)
+		os.Exit(1)
 	}
 	rabbitCH, err := rabbitConn.Channel()
 	if err != nil {
-		log.Fatalf("Unable to open RabbitMQ channel: %v", err)
+		slog.Error("Unable to open RabbitMQ channel", "err", err)
+		os.Exit(1)
 	}
 
 	queueName := os.Getenv("CLICK_QUEUE_NAME")
@@ -195,7 +206,8 @@ func loadConfig(ctx context.Context) *Config {
 		nil,   // args
 	)
 	if err != nil {
-		log.Fatalf("Failed to declare RabbitMQ queue %q: %v", queueName, err)
+		slog.Error("Failed to declare RabbitMQ queue", "queue", queueName, "err", err)
+		os.Exit(1)
 	}
 
 	IDServiceURL := "http://" + os.Getenv("ID_SERVICE_DOMAIN") + os.Getenv("ID_SERVICE_PORT") + "/new-id"
@@ -234,11 +246,11 @@ func publishClickEvent(cfg *Config, shortCode, userAgent string) {
 		Timestamp: time.Now(),
 		UserAgent: userAgent,
 	}
-	log.Println("Publishing click event with data:", event)
+	slog.Info("Publishing click event", "event", event)
 
 	body, err := json.Marshal(event)
 	if err != nil {
-		log.Printf("Error marshalling click event: %v", err)
+		slog.Error("Error marshalling click event", "err", err)
 		return
 	}
 	err = cfg.RabbitMQ.PublishWithContext(
@@ -250,6 +262,6 @@ func publishClickEvent(cfg *Config, shortCode, userAgent string) {
 		},
 	)
 	if err != nil {
-		log.Printf("Error publishing click event: %v", err)
+		slog.Error("Error publishing click event", "err", err)
 	}
 }
