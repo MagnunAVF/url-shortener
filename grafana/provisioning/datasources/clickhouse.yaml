@@ -1,0 +1,12 @@
+apiVersion: 1
+
+datasources:
+  - name: ClickHouse Logs
+    type: grafana-clickhouse-datasource
+    access: proxy
+    url: ${CLICKHOUSE_ENDPOINT}
+    isDefault: false
+    jsonData:
+      defaultDatabase: analytics
+      logs:
+        enabled: true

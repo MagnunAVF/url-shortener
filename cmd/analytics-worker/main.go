@@ -2,7 +2,7 @@ package main
 
 import (
 	"encoding/json"
-	"log"
+	"log/slog"
 	"os"
 	"time"
 
@@ -13,37 +13,40 @@ import (
 	"gorm.io/gorm/clause"
 
 	"github.com/MagnunAVF/url-shortener/internal"
+	applog "github.com/MagnunAVF/url-shortener/internal/logger"
 )
 
 type ClickEvent struct {
 	ShortCode string    `json:"short_code"`
 	Timestamp time.Time `json:"timestamp"`
 	UserAgent string    `json:"user_agent"`
+	RequestID string    `json:"request_id,omitempty"`
 }
 
 func main() {
 	if err := godotenv.Load(".env"); err != nil {
-		log.Printf("Warning: .env file not found, relying on env vars: %v", err)
+		slog.Warn(".env file not found, relying on env vars", "err", err)
 	}
 
-	log.SetOutput(os.Stdout)
-	log.SetFlags(log.LstdFlags | log.Lmicroseconds | log.Lshortfile)
-	log.SetPrefix("analytics-worker ")
+	applog.InitFromEnv()
 
-	writeDB, err := gorm.Open(postgres.Open(os.Getenv("DB_URL")), &gorm.Config{})
+	writeDB, err := gorm.Open(postgres.Open(os.Getenv("DB_URL")), &gorm.Config{Logger: applog.NewGormLogger(os.Getenv("GORM_LOG_LEVEL"))})
 	if err != nil {
-		log.Fatalf("Unable to connect to primary database: %v", err)
+		slog.Error("Unable to connect to primary database", "err", err)
+		os.Exit(1)
 	}
 
 	rabbitConn, err := amqp091.Dial(os.Getenv("RABBITMQ_URL"))
 	if err != nil {
-		log.Fatalf("Unable to connect to RabbitMQ: %v", err)
+		slog.Error("Unable to connect to RabbitMQ", "err", err)
+		os.Exit(1)
 	}
 	defer rabbitConn.Close()
 
 	rabbitCH, err := rabbitConn.Channel()
 	if err != nil {
-		log.Fatalf("Unable to open RabbitMQ channel: %v", err)
+		slog.Error("Unable to open RabbitMQ channel", "err", err)
+		os.Exit(1)
 	}
 	defer rabbitCH.Close()
 
@@ -52,24 +55,26 @@ func main() {
 		true, false, false, false, nil,
 	)
 	if err != nil {
-		log.Fatalf("Failed to declare queue: %v", err)
+		slog.Error("Failed to declare queue", "err", err)
+		os.Exit(1)
 	}
 
 	// Set prefetch to 100. This worker will grab 100 messages at a time.
 	if err := rabbitCH.Qos(100, 0, false); err != nil {
-		log.Fatalf("Failed to set QoS: %v", err)
+		slog.Error("Failed to set QoS", "err", err)
+		os.Exit(1)
 	}
 
 	msgs, err := rabbitCH.Consume(
 		q.Name, "", false, false, false, false, nil,
 	)
 	if err != nil {
-		log.Fatalf("Failed to register consumer: %v", err)
+		slog.Error("Failed to register consumer", "err", err)
+		os.Exit(1)
 	}
 
-	log.Println("Analytics Worker started. Waiting for click events...")
+	slog.Info("Analytics Worker started. Waiting for click events...")
 
-	var forever chan struct{}
 	var events []ClickEvent
 	var deliveries []amqp091.Delivery
 
@@ -81,16 +86,17 @@ func main() {
 			select {
 			case d, ok := <-msgs:
 				if !ok {
-					log.Println("RabbitMQ channel closed.")
+					slog.Warn("RabbitMQ channel closed")
 					return
 				}
 				var event ClickEvent
 				if err := json.Unmarshal(d.Body, &event); err != nil {
-					log.Printf("Error decoding message: %v. Rejecting.", err)
+					slog.Error("Error decoding message. Rejecting.", "err", err)
 					// 'false' means don't re-queue
 					d.Reject(false)
 					continue
 				}
+				slog.Info("received click event", "short_code", event.ShortCode, "request_id", event.RequestID)
 				events = append(events, event)
 				deliveries = append(deliveries, d)
 
@@ -104,7 +110,7 @@ func main() {
 			// Process on a timer
 			case <-ticker.C:
 				if len(events) > 0 {
-					log.Printf("Timer flush: processing %d queued events", len(events))
+					slog.Info("Timer flush: processing queued events", "count", len(events))
 					processBatch(writeDB, events, deliveries)
 					events, deliveries = nil, nil
 				}
@@ -112,15 +118,15 @@ func main() {
 		}
 	}()
 
-	// Block forever
-	<-forever
+	// Block forever without using a nil channel
+	select {}
 }
 
 func processBatch(db *gorm.DB, events []ClickEvent, deliveries []amqp091.Delivery) {
 	if len(events) == 0 {
 		return
 	}
-	log.Printf("Processing batch of %d events", len(events))
+	slog.Info("Processing batch of events", "count", len(events))
 
 	counts := make(map[string]int64)
 	for _, event := range events {
@@ -139,17 +145,17 @@ func processBatch(db *gorm.DB, events []ClickEvent, deliveries []amqp091.Deliver
 					}),
 				},
 			).Create(&rec).Error; err != nil {
-				log.Printf("Error upserting click count for short code %s: %v", shortCode, err)
+				slog.Error("Error upserting click count", "short_code", shortCode, "err", err)
 				return err
 			}
 		}
-		log.Printf("Successfully processed batch of %d events", len(events))
+		slog.Info("Successfully processed batch", "count", len(events))
 		return nil
 	})
 
 	// Nack in transaction error
 	if err != nil {
-		log.Printf("Failed to process batch transaction: %v. Nacking messages.", err)
+		slog.Error("Failed to process batch transaction. Nacking messages.", "err", err)
 		// Re-queue messages for another try
 		nackAll(deliveries)
 		return
@@ -157,7 +163,7 @@ func processBatch(db *gorm.DB, events []ClickEvent, deliveries []amqp091.Deliver
 
 	// ack in transaction success
 	ackAll(deliveries)
-	log.Printf("Successfully processed and acked %d messages.", len(deliveries))
+	slog.Info("Successfully processed and acked messages", "count", len(deliveries))
 }
 
 func ackAll(deliveries []amqp091.Delivery) {
