@@ -34,10 +34,17 @@
   .log_level = .level
   del(.level)
 
-  # Explicitly encode the 'data' object back into a JSON string.
+  # Extract request_id from .data before encoding, default to "-"
   if exists(.data) && is_object(.data) {
+    if exists(.data.request_id) && is_string(.data.request_id) {
+      .request_id = .data.request_id
+      del(.data.request_id)
+    } else {
+      .request_id = "-"
+    }
     .data = encode_json(.data)
   } else {
+    .request_id = "-"
     .data = null
   }
 

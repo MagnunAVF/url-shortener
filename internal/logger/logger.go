@@ -123,7 +123,8 @@ func FromContext(ctx context.Context) *slog.Logger {
 	}
 	if v := ctx.Value(ctxKeyRequestID); v != nil {
 		if id, ok := v.(string); ok && id != "" {
-			l = l.With("request_id", id)
+			// Add request_id at root level (outside the "data" group)
+			l = l.WithGroup("").With("request_id", id).WithGroup("data")
 		}
 	}
 	return l
