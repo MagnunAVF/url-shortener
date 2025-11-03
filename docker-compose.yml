@@ -4,6 +4,7 @@ services:
   postgres:
     image: postgres:16.10-alpine
     container_name: postgres
+    hostname: postgres
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-postgres}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
@@ -25,6 +26,7 @@ services:
   redis:
     image: redis:8.2.2-alpine
     container_name: redis
+    hostname: redis
     ports:
       - "6379:6379"
     healthcheck:
@@ -36,6 +38,7 @@ services:
   rabbitmq:
     image: rabbitmq:4.1.5-management-alpine
     container_name: rabbitmq
+    hostname: rabbitmq
     ports:
       - "5672:5672"
       - "15672:15672"
@@ -48,6 +51,7 @@ services:
   clickhouse:
     image: clickhouse/clickhouse-server:25.9-alpine
     container_name: clickhouse
+    hostname: clickhouse
     environment:
       CLICKHOUSE_DB: ${CLICKHOUSE_DB:-analytics}
       CLICKHOUSE_USER: ${CLICKHOUSE_USER:-default}
@@ -67,6 +71,7 @@ services:
 
   api-service:
     container_name: api-service
+    hostname: api-service
     build:
       context: .
       dockerfile: Dockerfile
@@ -86,9 +91,12 @@ services:
         condition: service_healthy
       id-service:
         condition: service_started
+    environment:
+      LOG_OUTPUT: /var/log/app/app.log
 
   id-service:
     container_name: id-service
+    hostname: id-service
     build:
       context: .
       dockerfile: Dockerfile
@@ -98,9 +106,12 @@ services:
     depends_on:
       clickhouse:
         condition: service_healthy
+    environment:
+      LOG_OUTPUT: /var/log/app/app.log
 
   analytics-worker:
     container_name: analytics-worker
+    hostname: analytics-worker
     build:
       context: .
       dockerfile: Dockerfile
@@ -114,6 +125,8 @@ services:
         condition: service_healthy
       clickhouse:
         condition: service_healthy
+    environment:
+      LOG_OUTPUT: /var/log/app/app.log
     restart: on-failure
 
 volumes:
