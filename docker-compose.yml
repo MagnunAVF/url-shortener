@@ -69,6 +69,23 @@ services:
       timeout: 5s
       retries: 5
 
+  grafana:
+    image: grafana/grafana:main-ubuntu
+    container_name: grafana
+    hostname: grafana
+    ports:
+      - "3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+      GF_INSTALL_PLUGINS: grafana-clickhouse-datasource
+      CLICKHOUSE_ENDPOINT: ${CLICKHOUSE_ENDPOINT:-http://clickhouse:8123}
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+
   api-service:
     container_name: api-service
     hostname: api-service
