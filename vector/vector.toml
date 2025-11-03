@@ -1,0 +1,73 @@
+[sources.my_app_logs]
+  type = "file"
+  include = ["/var/log/app/app.log"]
+  start_at_beginning = true
+
+[transforms.process_logs]
+  type = "remap"
+  inputs = ["my_app_logs"]
+  source = """
+  # Use the non-failing 'parse_timestamp()'
+  # It will return 'null' if .time is missing, null, or in a bad format.
+  # Move all data from .message into the root event first
+  if exists(.message) {
+    if is_string(.message) {
+      parsed, err = parse_json(.message)
+      if err == null && is_object(parsed) {
+        . = merge!(., parsed)
+      } else {
+        .msg = .message
+      }
+    } else if is_object(.message) {
+      . = merge!(., .message)
+    }
+    del(.message)
+  }
+
+  .time = parse_timestamp(.time, "%+") ?? now()
+
+  # ClickHouse JSONEachRow by default expects 'YYYY-MM-DD HH:MM:SS.ffffff'
+  # Format to microseconds with space separator and no timezone suffix
+  .time = format_timestamp!(.time, "%F %T%.6f")
+
+  # Rename 'level' to 'log_level'
+  .log_level = .level
+  del(.level)
+
+  # Extract request_id from .data before encoding, default to "-"
+  if exists(.data) && is_object(.data) {
+    if exists(.data.request_id) && is_string(.data.request_id) {
+      .request_id = .data.request_id
+      del(.data.request_id)
+    } else {
+      .request_id = "-"
+    }
+    .data = encode_json(.data)
+  } else {
+    .request_id = "-"
+    .data = null
+  }
+
+  # Remove unexpected fields that might cause ClickHouse to fail on insert
+  if exists(.timestamp) {
+    del(.timestamp)
+  }
+  """
+
+# [sinks.my_console]
+#   type = "console"
+#   inputs = ["process_logs"]
+#   [sinks.my_console.encoding]
+#     codec = "json"
+#     [sinks.my_console.encoding.json]
+#       pretty = true
+
+[sinks.to_clickhouse]
+  type = "clickhouse"
+  inputs = ["process_logs"]
+  endpoint = "${CLICKHOUSE_ENDPOINT}"
+  database = "analytics"
+  table = "logs"
+  batch.max_bytes = 1048576
+  batch.timeout_secs = 5
+  healthcheck.enabled = true

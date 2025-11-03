@@ -4,6 +4,7 @@ services:
   postgres:
     image: postgres:16.10-alpine
     container_name: postgres
+    hostname: postgres
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-postgres}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
@@ -22,5 +23,132 @@ services:
       timeout: 5s
       retries: 5
 
+  redis:
+    image: redis:8.2.2-alpine
+    container_name: redis
+    hostname: redis
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  rabbitmq:
+    image: rabbitmq:4.1.5-management-alpine
+    container_name: rabbitmq
+    hostname: rabbitmq
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "check_running"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  clickhouse:
+    image: clickhouse/clickhouse-server:25.9-alpine
+    container_name: clickhouse
+    hostname: clickhouse
+    environment:
+      CLICKHOUSE_DB: ${CLICKHOUSE_DB:-analytics}
+      CLICKHOUSE_USER: ${CLICKHOUSE_USER:-default}
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-}
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: 1
+    ports:
+      - "8123:8123"
+      - "9000:9000"
+    volumes:
+      - clickhouse_data:/var/lib/clickhouse
+      - ./clickhouse/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD", "clickhouse-client", "--query", "SELECT 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  grafana:
+    image: grafana/grafana:main-ubuntu
+    container_name: grafana
+    hostname: grafana
+    ports:
+      - "3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+      GF_INSTALL_PLUGINS: grafana-clickhouse-datasource
+      CLICKHOUSE_ENDPOINT: ${CLICKHOUSE_ENDPOINT:-http://clickhouse:8123}
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+
+  api-service:
+    container_name: api-service
+    hostname: api-service
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        SERVICE_DIR: cmd/api-service
+    env_file: .env
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      clickhouse:
+        condition: service_healthy
+      id-service:
+        condition: service_started
+    environment:
+      LOG_OUTPUT: /var/log/app/app.log
+      CLICKHOUSE_ENDPOINT: ${CLICKHOUSE_ENDPOINT:-http://clickhouse:8123}
+
+  id-service:
+    container_name: id-service
+    hostname: id-service
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        SERVICE_DIR: cmd/id-service
+    env_file: .env
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+    environment:
+      LOG_OUTPUT: /var/log/app/app.log
+      CLICKHOUSE_ENDPOINT: ${CLICKHOUSE_ENDPOINT:-http://clickhouse:8123}
+
+  analytics-worker:
+    container_name: analytics-worker
+    hostname: analytics-worker
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        SERVICE_DIR: cmd/analytics-worker
+    env_file: .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      clickhouse:
+        condition: service_healthy
+    environment:
+      LOG_OUTPUT: /var/log/app/app.log
+      CLICKHOUSE_ENDPOINT: ${CLICKHOUSE_ENDPOINT:-http://clickhouse:8123}
+    restart: on-failure
+
 volumes:
   postgres_data:
+  clickhouse_data:
