@@ -58,7 +58,7 @@
 [sinks.to_clickhouse]
   type = "clickhouse"
   inputs = ["process_logs"]
-  endpoint = "http://clickhouse:8123"
+  endpoint = "${CLICKHOUSE_ENDPOINT}"
   database = "analytics"
   table = "logs"
   batch.max_bytes = 1048576

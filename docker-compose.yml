@@ -93,6 +93,7 @@ services:
         condition: service_started
     environment:
       LOG_OUTPUT: /var/log/app/app.log
+      CLICKHOUSE_ENDPOINT: ${CLICKHOUSE_ENDPOINT:-http://clickhouse:8123}
 
   id-service:
     container_name: id-service
@@ -108,6 +109,7 @@ services:
         condition: service_healthy
     environment:
       LOG_OUTPUT: /var/log/app/app.log
+      CLICKHOUSE_ENDPOINT: ${CLICKHOUSE_ENDPOINT:-http://clickhouse:8123}
 
   analytics-worker:
     container_name: analytics-worker
@@ -127,6 +129,7 @@ services:
         condition: service_healthy
     environment:
       LOG_OUTPUT: /var/log/app/app.log
+      CLICKHOUSE_ENDPOINT: ${CLICKHOUSE_ENDPOINT:-http://clickhouse:8123}
     restart: on-failure
 
 volumes:
